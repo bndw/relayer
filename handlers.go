@@ -430,6 +430,17 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
+		// TODO: figure out how to close this chan when the relay is not an auther
+		// and no authDeadline exists.
+		authDeadline := make(chan any, 1)
+		if _, ok := s.relay.(Auther); ok && s.options.authDeadline != nil {
+			go func() {
+				defer close(authDeadline)
+				<-time.After(*s.options.authDeadline)
+				authDeadline <- struct{}{}
+			}()
+		}
+
 		for {
 			select {
 			case <-ticker.C:
@@ -439,6 +450,11 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				s.Log.Infof("pinging for %s", conn.RemoteAddr().String())
+			case <-authDeadline:
+				if ws.authed == "" {
+					s.Log.Errorf("authDeadline elapsed: %v; closing websocket", conn.RemoteAddr().String())
+					return
+				}
 			case <-stop:
 				return
 			}
