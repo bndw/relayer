@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/fasthttp/websocket"
@@ -348,7 +349,12 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(pingPeriod)
 	stop := make(chan struct{})
 
-	s.Log.Infof("connected from %s", conn.RemoteAddr().String())
+	connAddr := conn.RemoteAddr().String()
+	if strings.HasPrefix(connAddr, "127") && r.Header.Get("X-Forwarded-For") != "" {
+		connAddr = r.Header.Get("X-Forwarded-For")
+	}
+
+	s.Log.Infof("connected from %s", connAddr)
 
 	ws := challenge(conn)
 
@@ -372,7 +378,7 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 				removeListener(ws)
 			}
 			s.clientsMu.Unlock()
-			s.Log.Infof("disconnected from %s", conn.RemoteAddr().String())
+			s.Log.Infof("disconnected from %s", connAddr)
 
 			ctx.Done()
 		}()
@@ -398,7 +404,7 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 					websocket.CloseNoStatusReceived, // 1005
 					websocket.CloseAbnormalClosure,  // 1006
 				) {
-					s.Log.Warningf("unexpected close error from %s: %v", r.Header.Get("X-Forwarded-For"), err)
+					s.Log.Warningf("unexpected close error from %s: %v", connAddr, err)
 				}
 				break
 			}
@@ -452,7 +458,7 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 				s.Log.Infof("pinging for %s", conn.RemoteAddr().String())
 			case <-authDeadline:
 				if ws.authed == "" {
-					s.Log.Errorf("authDeadline elapsed: %v; closing websocket", conn.RemoteAddr().String())
+					s.Log.Errorf("authDeadline elapsed: %v; closing websocket", connAddr)
 					return
 				}
 			case <-stop:
