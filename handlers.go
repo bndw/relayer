@@ -423,16 +423,14 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	// writer
 	go func() {
-		authDeadline := make(chan any, 1)
-
 		defer func() {
 			ticker.Stop()
 			conn.Close()
-			close(authDeadline)
 			for range stop {
 			}
 		}()
 
+		authDeadline := make(chan any, 1)
 		go func() {
 			if s.options.authDeadline == nil {
 				return
@@ -443,6 +441,12 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 			<-time.After(*s.options.authDeadline)
 			authDeadline <- struct{}{}
+			// NOTE: authDeadline is explicitly closed before returning from the for
+			// select cases below to ensure the channel is always closed.
+			// - It cannot be closed from this goroutine because it would then not
+			//	be closed in the other cases.
+			// - It cannot be closed in the main defer func because this goroutine
+			// could then write to a closed channel.
 		}()
 
 		for {
@@ -451,15 +455,18 @@ func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 				err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait))
 				if err != nil {
 					s.Log.Errorf("error writing ping: %v; closing websocket", err)
+					close(authDeadline)
 					return
 				}
 				s.Log.Infof("pinging for %s", conn.RemoteAddr().String())
 			case <-authDeadline:
 				if ws.authed == "" {
 					s.Log.Errorf("authDeadline elapsed: %v; closing websocket", conn.RemoteAddr().String())
+					close(authDeadline)
 					return
 				}
 			case <-stop:
+				close(authDeadline)
 				return
 			}
 		}
